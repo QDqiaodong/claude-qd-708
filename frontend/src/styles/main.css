@@ -111,6 +111,32 @@ body {
   color: var(--kt-danger);
 }
 
+.stat-chip.is-redflag {
+  background: #7f0000;
+  color: #fff;
+  animation: redflag-pulse 1.4s infinite;
+}
+
+@keyframes redflag-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.55); }
+  70% { box-shadow: 0 0 0 8px rgba(255, 82, 82, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0); }
+}
+
+/* 顶栏操作人身份 */
+.operator-box {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding-left: 12px;
+  margin-left: 4px;
+  border-left: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.operator-box .el-radio-button__inner {
+  padding: 6px 10px;
+}
+
 /* ---------- Tab 导航 ---------- */
 .navbar {
   display: flex;
@@ -213,6 +239,18 @@ body {
   background: linear-gradient(120deg, #1f2933 0%, #37474f 100%);
   color: #fff;
   margin-bottom: 16px;
+}
+
+.timer-wrap.is-redflag {
+  background: linear-gradient(120deg, #7f0000 0%, #b71c1c 70%);
+  box-shadow: 0 0 22px rgba(198, 40, 40, 0.4);
+}
+
+.rf-blink {
+  color: #ffcdd2;
+  font-weight: 700;
+  letter-spacing: 1px;
+  animation: pulse 1.2s infinite;
 }
 
 .big-timer {

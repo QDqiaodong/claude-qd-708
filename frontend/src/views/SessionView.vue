@@ -29,11 +29,13 @@
             <span class="tag" :class="statusClass(row.status)">{{ row.statusName }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="210">
+        <el-table-column label="操作" width="300">
           <template #default="{ row }">
             <el-button v-if="row.status === 'PENDING'" link type="success" @click="act(row, 'start')">开赛</el-button>
             <el-button v-if="row.status === 'RUNNING'" link type="warning" @click="act(row, 'finish')">结束</el-button>
             <el-button v-if="row.status === 'PENDING'" link type="danger" @click="act(row, 'cancel')">取消</el-button>
+            <el-button v-if="row.redFlagActive" link type="danger" @click="openConsole(row)">🚩 红旗处置台</el-button>
+            <el-button v-if="row.redFlagCount" link @click="openConsole(row)">红旗记录 {{ row.redFlagCount }}</el-button>
             <el-button link @click="focus(row)">设为本场</el-button>
           </template>
         </el-table-column>
@@ -73,8 +75,10 @@
 
 <script setup>
 import { inject, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { sessionApi } from '../api'
 
+const nav = useRouter()
 const track = inject('track')
 const rows = ref([])
 const dialog = ref(false)
@@ -86,6 +90,7 @@ async function load() {
 
 function statusClass(status) {
   if (status === 'RUNNING') return 'running'
+  if (status === 'RED_FLAG') return 'danger'
   if (status === 'FINISHED') return 'ok'
   if (status === 'CANCELED') return 'mute'
   return 'warn'
@@ -121,6 +126,11 @@ async function act(row, type) {
 
 function focus(row) {
   track.sessionId.value = row.id
+}
+
+function openConsole(row) {
+  track.sessionId.value = row.id
+  nav.push('/red-flag')
 }
 
 watch(() => track.sessionId.value, () => load())

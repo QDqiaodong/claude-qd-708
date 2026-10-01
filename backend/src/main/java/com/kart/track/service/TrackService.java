@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,6 +19,8 @@ import com.kart.track.domain.Kart;
 import com.kart.track.domain.LapRecord;
 import com.kart.track.domain.Maintenance;
 import com.kart.track.domain.RaceSession;
+import com.kart.track.domain.RedFlagEvent;
+import com.kart.track.domain.RedFlagLap;
 import com.kart.track.domain.TrackDict;
 import com.kart.track.dto.Views;
 import com.kart.track.repository.DriverRepository;
@@ -25,6 +28,8 @@ import com.kart.track.repository.KartRepository;
 import com.kart.track.repository.LapRecordRepository;
 import com.kart.track.repository.MaintenanceRepository;
 import com.kart.track.repository.RaceSessionRepository;
+import com.kart.track.repository.RedFlagEventRepository;
+import com.kart.track.repository.RedFlagLapRepository;
 
 /** 首页「赛道实况」：大计时器 + 场次信息条 + 赛道点位 + 实时圈速排行榜。 */
 @Service
@@ -35,17 +40,23 @@ public class TrackService {
     private final DriverRepository driverRepository;
     private final KartRepository kartRepository;
     private final MaintenanceRepository maintenanceRepository;
+    private final RedFlagLapRepository redFlagLapRepository;
+    private final RedFlagEventRepository redFlagEventRepository;
 
     public TrackService(RaceSessionRepository sessionRepository,
                         LapRecordRepository lapRecordRepository,
                         DriverRepository driverRepository,
                         KartRepository kartRepository,
-                        MaintenanceRepository maintenanceRepository) {
+                        MaintenanceRepository maintenanceRepository,
+                        RedFlagLapRepository redFlagLapRepository,
+                        RedFlagEventRepository redFlagEventRepository) {
         this.sessionRepository = sessionRepository;
         this.lapRecordRepository = lapRecordRepository;
         this.driverRepository = driverRepository;
         this.kartRepository = kartRepository;
         this.maintenanceRepository = maintenanceRepository;
+        this.redFlagLapRepository = redFlagLapRepository;
+        this.redFlagEventRepository = redFlagEventRepository;
     }
 
     /** 顶栏计数器 */
@@ -65,6 +76,8 @@ public class TrackService {
                 maintOpen += 1;
             }
         }
+        long redFlagActive = sessionRepository.countByStatus("RED_FLAG");
+        long pendingLaps = redFlagLapRepository.countByRuling("PENDING");
         return new Views.Overview(
                 kartRepository.count(),
                 kartRepository.countByStatus("AVAILABLE"),
@@ -77,7 +90,9 @@ public class TrackService {
                 lapRecordRepository.count(),
                 maintOpen,
                 maintDone,
-                fee);
+                fee,
+                redFlagActive,
+                pendingLaps);
     }
 
     /**
@@ -102,9 +117,23 @@ public class TrackService {
 
         List<LapRecord> laps = lapRecordRepository.findBySessionIdOrderByCreatedAtDesc(session.getId());
 
+        // 红旗计时隔离：待裁定 / 已作废的红旗圈速不进实时排行榜、不计最快圈、不占圈数
+        java.util.Set<Long> excludedLapIds = new HashSet<>();
+        for (RedFlagLap row : redFlagLapRepository.findAllBySessionIdOrderByIdDesc(session.getId())) {
+            if (!"CONFIRMED".equals(row.getRuling())) {
+                excludedLapIds.add(row.getLapId());
+            }
+        }
+        List<LapRecord> boardLaps = new ArrayList<>();
+        for (LapRecord lap : laps) {
+            if (!excludedLapIds.contains(lap.getId())) {
+                boardLaps.add(lap);
+            }
+        }
+
         // 排行榜：有效圈按车手取最快，升序
         Map<Long, List<LapRecord>> byDriver = new LinkedHashMap<>();
-        for (LapRecord lap : laps) {
+        for (LapRecord lap : boardLaps) {
             if (!"VALID".equals(lap.getValid())) {
                 continue;
             }
@@ -162,7 +191,7 @@ public class TrackService {
         String summary = TrackDict.trackConfigName(session.getTrackConfig()) + " · " + session.getGroupCode()
                 + " 组 · " + session.getSignedCount() + "/" + session.getMaxKarts() + " 台";
         return new Views.LiveView(
-                sessionView(session, laps),
+                sessionView(session, boardLaps, laps.size()),
                 leaderboard,
                 dots,
                 laps.size(),
@@ -170,12 +199,13 @@ public class TrackService {
                 summary);
     }
 
-    /** 场次计时：已进行时长（秒） */
+    /** 场次计时：已进行时长（秒）。红旗处理中计时不暂停（处置台另显示红旗持续时长） */
     public long elapsedSec(RaceSession session) {
         if (session == null || session.getStartTime() == null) {
             return 0;
         }
-        LocalDateTime end = "RUNNING".equals(session.getStatus()) ? LocalDateTime.now() : session.getEndTime();
+        LocalDateTime end = "RUNNING".equals(session.getStatus()) || "RED_FLAG".equals(session.getStatus())
+                ? LocalDateTime.now() : session.getEndTime();
         if (end == null) {
             end = LocalDateTime.now();
         }
@@ -191,13 +221,18 @@ public class TrackService {
         if (!running.isEmpty()) {
             return running.get(0);
         }
+        // 没有进行中但有红旗处理中的场次时，实况页也应落到该场
+        List<RaceSession> flagged = sessionRepository.findAllByStatusOrderByStartTimeAsc("RED_FLAG");
+        if (!flagged.isEmpty()) {
+            return flagged.get(0);
+        }
         List<RaceSession> all = sessionRepository.findAllByOrderByStartTimeDesc();
         return all.isEmpty() ? null : all.get(0);
     }
 
-    private Views.SessionView sessionView(RaceSession session, List<LapRecord> laps) {
+    private Views.SessionView sessionView(RaceSession session, List<LapRecord> boardLaps, long allLapCount) {
         Integer fastest = null;
-        for (LapRecord lap : laps) {
+        for (LapRecord lap : boardLaps) {
             if ("VALID".equals(lap.getValid()) && (fastest == null || lap.getLapTimeMs() < fastest)) {
                 fastest = lap.getLapTimeMs();
             }
@@ -215,8 +250,12 @@ public class TrackService {
                 session.getStatus(),
                 TrackDict.sessionStatusName(session.getStatus()),
                 elapsedSec(session),
-                laps.size(),
-                TrackDict.formatLap(fastest));
+                allLapCount,
+                TrackDict.formatLap(fastest),
+                redFlagEventRepository.findBySessionIdAndStatus(session.getId(), "ACTIVE").isPresent(),
+                redFlagEventRepository.findBySessionIdAndStatus(session.getId(), "ACTIVE")
+                        .map(RedFlagEvent::getId).orElse(null),
+                redFlagEventRepository.findAllBySessionIdOrderByOccurredAtDesc(session.getId()).size());
     }
 
     /** 车辆在赛道上的相对速度（用于前端小车点位的移动速度） */

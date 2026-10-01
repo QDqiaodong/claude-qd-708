@@ -22,6 +22,7 @@ import com.kart.track.dto.Views;
 import com.kart.track.repository.KartRepository;
 import com.kart.track.repository.LapRecordRepository;
 import com.kart.track.repository.RaceSessionRepository;
+import com.kart.track.repository.RedFlagEventRepository;
 
 /** 模块一：卡丁车（卡片墙 + 状态切换 + 派车到本场）。 */
 @Service
@@ -30,22 +31,27 @@ public class KartService {
     private final KartRepository kartRepository;
     private final RaceSessionRepository sessionRepository;
     private final LapRecordRepository lapRecordRepository;
+    private final RedFlagEventRepository redFlagEventRepository;
 
     public KartService(KartRepository kartRepository,
                        RaceSessionRepository sessionRepository,
-                       LapRecordRepository lapRecordRepository) {
+                       LapRecordRepository lapRecordRepository,
+                       RedFlagEventRepository redFlagEventRepository) {
         this.kartRepository = kartRepository;
         this.sessionRepository = sessionRepository;
         this.lapRecordRepository = lapRecordRepository;
+        this.redFlagEventRepository = redFlagEventRepository;
     }
 
     @Transactional(readOnly = true)
     public List<Views.KartView> list() {
-        // 在赛车辆的所属场次：从进行中场次的圈速记录里反查一次，避免逐车查询
+        // 在赛车辆的所属场次：从进行中/红旗处理中场次的圈速记录里反查一次，避免逐车查询
         Map<Long, String> kartSession = new HashMap<>();
-        for (RaceSession running : sessionRepository.findAllByStatusOrderByStartTimeAsc("RUNNING")) {
-            for (LapRecord lap : lapRecordRepository.findBySessionIdOrderByCreatedAtDesc(running.getId())) {
-                kartSession.putIfAbsent(lap.getKartId(), running.getSessionNo());
+        for (String status : new String[] {"RUNNING", "RED_FLAG"}) {
+            for (RaceSession active : sessionRepository.findAllByStatusOrderByStartTimeAsc(status)) {
+                for (LapRecord lap : lapRecordRepository.findBySessionIdOrderByCreatedAtDesc(active.getId())) {
+                    kartSession.putIfAbsent(lap.getKartId(), active.getSessionNo());
+                }
             }
         }
         List<Views.KartView> list = new ArrayList<>();
@@ -108,6 +114,10 @@ public class KartService {
             throw new BizException("只有「可用」状态的车才能派上赛道，当前为" + TrackDict.kartStatusName(kart.getStatus()));
         }
         RaceSession session = resolveSession(req.getSessionId());
+        if ("RED_FLAG".equals(session.getStatus())
+                || redFlagEventRepository.findBySessionIdAndStatus(session.getId(), "ACTIVE").isPresent()) {
+            throw new BizException("场次 " + session.getSessionNo() + " 红旗处理中，车辆调度已锁定，不能派车");
+        }
         if (!"PENDING".equals(session.getStatus()) && !"RUNNING".equals(session.getStatus())) {
             throw new BizException("场次 " + session.getSessionNo() + " 已结束或已取消，不能派车");
         }
@@ -122,12 +132,18 @@ public class KartService {
         return toView(kart, session.getSessionNo());
     }
 
-    /** 收车：在赛 → 可用 */
+    /** 收车：在赛 → 可用。红旗事件核查清单中的车由处置台接管，不能在此直接收车 */
     @Transactional
     public Views.KartView recall(Long id) {
         Kart kart = kartRepository.findById(id).orElseThrow(() -> new BizException("车辆不存在"));
         if (!"ON_TRACK".equals(kart.getStatus())) {
             throw new BizException(kart.getKartNo() + " 当前不在赛道上");
+        }
+        for (RaceSession flagged : sessionRepository.findAllByStatusOrderByStartTimeAsc("RED_FLAG")) {
+            if (redFlagEventRepository.findBySessionIdAndStatus(flagged.getId(), "ACTIVE").isPresent()) {
+                throw new BizException(kart.getKartNo() + " 在场次 " + flagged.getSessionNo()
+                        + " 的红旗核查清单中，收车/退出请在红旗处置台核查");
+            }
         }
         kart.setStatus("AVAILABLE");
         kart.setUpdatedAt(LocalDateTime.now());

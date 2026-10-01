@@ -1,11 +1,12 @@
 <template>
   <div>
     <!-- 大计时器 + 场次信息条 -->
-    <div class="timer-wrap">
+    <div class="timer-wrap" :class="{ 'is-redflag': session && session.status === 'RED_FLAG' }">
       <div>
         <div class="timer-label">
           <span v-if="session && session.status === 'RUNNING'" class="live-dot"></span>
-          本场已进行时长 · {{ session ? session.statusName : '暂无场次' }}
+          <span v-if="session && session.status === 'RED_FLAG'" class="rf-blink">🚩 红旗处理中 · 正常圈速已暂停入榜，上报圈速将隔离待裁定</span>
+          <span v-else>本场已进行时长 · {{ session ? session.statusName : '暂无场次' }}</span>
         </div>
         <div class="big-timer">{{ timerText }}<span class="ms">.{{ tenths }}</span></div>
       </div>
@@ -17,7 +18,8 @@
         <span class="kv">已完成圈数<b>{{ lapCount }}</b></span>
         <span class="kv">本场最快<b>{{ fastestText }}</b></span>
       </div>
-      <div style="margin-left: auto">
+      <div style="margin-left: auto; display: flex; gap: 8px; align-items: center">
+        <el-button v-if="session && session.redFlagActive" type="warning" @click="goRedFlag">前往红旗处置台</el-button>
         <el-button type="danger" @click="openLapDialog">＋ 登记圈速</el-button>
       </div>
     </div>
@@ -111,6 +113,13 @@
             <span class="tag" :class="row.valid === 'VALID' ? 'ok' : 'warn'">{{ row.validName }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="红旗隔离" width="118">
+          <template #default="{ row }">
+            <span v-if="row.redFlagLap" class="tag" :class="row.ruling === 'CONFIRMED' ? 'ok' : (row.ruling === 'VOID' ? 'mute' : 'danger')">
+              🚩 {{ row.rulingName }}
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column label="本场最快" width="100">
           <template #default="{ row }">
             <span v-if="row.fastest" class="tag danger">🏁 最快圈</span>
@@ -119,8 +128,13 @@
         <el-table-column prop="createdAt" label="记录时间" />
         <el-table-column label="操作" width="150">
           <template #default="{ row }">
-            <el-button link type="warning" @click="setValid(row, 'OUT')">判出界</el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
+            <template v-if="row.redFlagLap">
+              <el-button link type="warning" @click="goRedFlag">去处置台裁定</el-button>
+            </template>
+            <template v-else>
+              <el-button link type="warning" @click="setValid(row, 'OUT')">判出界</el-button>
+              <el-button link type="danger" @click="remove(row)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -128,6 +142,9 @@
 
     <!-- 登记圈速 -->
     <el-dialog v-model="lapDialog" title="登记一个圈速" width="420">
+      <el-alert v-if="session && session.redFlagActive" type="error" :closable="false" show-icon
+                style="margin-bottom: 12px"
+                title="当前红旗处理中：该圈速会保留但不入榜，自动挂为待裁定记录，由主管在处置台确认有效或作废。" />
       <el-form label-width="80px">
         <el-form-item label="车手">
           <el-select v-model="lapForm.driverId" placeholder="选择车手" style="width: 100%">
@@ -162,8 +179,10 @@
 
 <script setup>
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { driverApi, kartApi, lapApi, trackApi } from '../api'
 
+const nav = useRouter()
 const TRACK_D = 'M140 250 C140 150 215 88 325 88 C435 88 470 130 560 130 C685 130 765 168 765 250 '
   + 'C765 342 692 402 560 402 C458 402 420 372 320 382 C220 392 140 348 140 250 Z'
 
@@ -194,7 +213,7 @@ const onTrackKarts = computed(() => karts.value.filter((k) => k.status === 'ON_T
 /* ---------- 大计时器：后端给的 elapsedSec + 本地走秒 ---------- */
 const elapsedSec = computed(() => {
   if (!session.value) return 0
-  if (session.value.status !== 'RUNNING') return session.value.elapsedSec || 0
+  if (session.value.status !== 'RUNNING' && session.value.status !== 'RED_FLAG') return session.value.elapsedSec || 0
   return (session.value.elapsedSec || 0) + Math.floor((now.value - fetchedAt.value) / 1000)
 })
 const timerText = computed(() => {
@@ -279,6 +298,10 @@ async function loadBase() {
 function openLapDialog() {
   lapForm.value = { driverId: null, kartId: null, lapTimeMs: 43800, valid: 'VALID' }
   lapDialog.value = true
+}
+
+function goRedFlag() {
+  nav.push('/red-flag')
 }
 
 async function submitLap() {

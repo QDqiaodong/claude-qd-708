@@ -74,8 +74,32 @@ public final class TrackDict {
     private static final Map<String, String> SESSION_STATUS = Map.of(
             "PENDING", "待开赛",
             "RUNNING", "进行中",
+            "RED_FLAG", "红旗处理中",
             "FINISHED", "已结束",
             "CANCELED", "已取消");
+
+    // ---------------- 红旗事件 ----------------
+    private static final Map<String, String> RED_FLAG_STATUS = Map.of(
+            "ACTIVE", "红旗处理中",
+            "RESUMED", "已恢复比赛",
+            "TERMINATED", "已强制终止");
+
+    /** 车辆核查结论：可继续 / 退出比赛 / 需要维修 */
+    private static final Map<String, String> CHECK_CONCLUSION = Map.of(
+            "CONTINUE", "可继续",
+            "RETIRE", "退出比赛",
+            "REPAIR", "需要维修");
+
+    /** 红旗期间圈速裁定：待裁定 / 已确认有效 / 已作废 */
+    private static final Map<String, String> LAP_RULING = Map.of(
+            "PENDING", "待裁定",
+            "CONFIRMED", "已确认有效",
+            "VOID", "已作废");
+
+    // ---------------- 操作人角色（处置台权限收口） ----------------
+    private static final Map<String, String> OPERATOR_ROLE = Map.of(
+            "STAFF", "值班人员",
+            "SUPERVISOR", "主管");
 
     // ---------------- 圈速 ----------------
     private static final Map<String, String> LAP_VALID = Map.of(
@@ -196,6 +220,38 @@ public final class TrackDict {
 
     public static String lapValidName(String valid) {
         return valid == null ? "" : LAP_VALID.getOrDefault(valid, valid);
+    }
+
+    public static boolean isValidRedFlagStatus(String status) {
+        return status != null && RED_FLAG_STATUS.containsKey(status);
+    }
+
+    public static String redFlagStatusName(String status) {
+        return status == null ? "" : RED_FLAG_STATUS.getOrDefault(status, status);
+    }
+
+    public static boolean isValidCheckConclusion(String conclusion) {
+        return conclusion != null && CHECK_CONCLUSION.containsKey(conclusion);
+    }
+
+    public static String checkConclusionName(String conclusion) {
+        return conclusion == null ? "待核查" : CHECK_CONCLUSION.getOrDefault(conclusion, conclusion);
+    }
+
+    public static boolean isValidLapRuling(String ruling) {
+        return ruling != null && LAP_RULING.containsKey(ruling);
+    }
+
+    public static String lapRulingName(String ruling) {
+        return ruling == null ? "" : LAP_RULING.getOrDefault(ruling, ruling);
+    }
+
+    public static boolean isValidOperatorRole(String role) {
+        return role != null && OPERATOR_ROLE.containsKey(role);
+    }
+
+    public static String operatorRoleName(String role) {
+        return role == null ? "" : OPERATOR_ROLE.getOrDefault(role, role);
     }
 
     public static boolean isValidMaintType(String type) {

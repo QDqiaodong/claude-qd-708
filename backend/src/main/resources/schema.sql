@@ -2,12 +2,15 @@
 -- 卡丁车赛道运营管理系统 · 建表 + 种子数据
 -- 库名 kart_track，由 mysql 镜像的 docker-entrypoint 在【镜像构建期】执行一次。
 --
--- 五个业务模块：
+-- 八个业务模块：
 --   1. kart         卡丁车（车号·车型·排量·功率·状态·累计里程/小时·保养间隔）
 --   2. driver       车手（会员号·年龄分组·驾照等级·累计场次·历史最快圈速）
 --   3. race_session 场次（赛道配置·分组·最大车辆数·已报名人数·状态）
 --   4. lap_record   圈速记录（写入走实体上的 @SQLInsert/@SQLUpdate/@SQLDelete 手写 SQL）
 --   5. maintenance  维修保养（工时·配件费·总费用·待修/维修中/已完工）
+--   6. red_flag_event 红旗事件（原因·发生时刻·生效中/已恢复/已终止；同场次同时只允许一个生效中）
+--   7. red_flag_check 红旗车辆核查（可继续 / 退出比赛 / 需要维修，每车一条、互不影响）
+--   8. red_flag_lap   红旗期间圈速隔离（1:1 挂 lap_record：待主管裁定 / 已确认有效 / 已作废）
 --
 -- 种子数据保证下面每条业务规则都能被真的触发（不是"理论上可以"）：
 --   [R1.1] 车号唯一            → K-01 已存在
@@ -33,6 +36,9 @@ SET FOREIGN_KEY_CHECKS = 0;
 CREATE DATABASE IF NOT EXISTS kart_track DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE kart_track;
 
+DROP TABLE IF EXISTS red_flag_lap;
+DROP TABLE IF EXISTS red_flag_check;
+DROP TABLE IF EXISTS red_flag_event;
 DROP TABLE IF EXISTS maintenance;
 DROP TABLE IF EXISTS lap_record;
 DROP TABLE IF EXISTS race_session;
@@ -92,7 +98,7 @@ CREATE TABLE race_session (
     group_code   VARCHAR(4)  NOT NULL COMMENT '分组：A / B / C',
     max_karts    INT         NOT NULL COMMENT '最大车辆数',
     signed_count INT         NOT NULL DEFAULT 0 COMMENT '已报名人数',
-    status       VARCHAR(16) NOT NULL COMMENT 'PENDING 待开赛 / RUNNING 进行中 / FINISHED 已结束 / CANCELED 已取消',
+    status       VARCHAR(16) NOT NULL COMMENT 'PENDING 待开赛 / RUNNING 进行中 / RED_FLAG 红旗处理中 / FINISHED 已结束 / CANCELED 已取消',
     PRIMARY KEY (id),
     UNIQUE KEY uk_session_no (session_no),
     KEY idx_session_status (status)
@@ -138,6 +144,80 @@ CREATE TABLE maintenance (
     KEY idx_maint_kart (kart_id),
     KEY idx_maint_status (status)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '维修保养';
+
+-- ----------------------------------------------------------------------------
+-- 模块六：红旗事件
+--
+-- active_key 是生成列：生效中（ACTIVE）= 场次 id；已恢复/已终止/已取消 = NULL。
+-- MySQL 唯一索引允许多个 NULL，因此 uk_active_session 从数据库层兜底：
+-- 同一场次同时最多只有一个 ACTIVE，两名值班人员再接近地同时发起也只能落一条。
+-- ----------------------------------------------------------------------------
+CREATE TABLE red_flag_event (
+    id             BIGINT       NOT NULL AUTO_INCREMENT,
+    event_no       VARCHAR(24)  NOT NULL COMMENT '事件编号，如 RF20260930001',
+    session_id     BIGINT       NOT NULL COMMENT '所属场次',
+    reason         VARCHAR(200) NOT NULL COMMENT '红旗原因（发起时必填）',
+    occurred_at    DATETIME     NOT NULL COMMENT '红旗发生时刻（服务端落库时间）',
+    status         VARCHAR(16)  NOT NULL COMMENT 'ACTIVE 生效中 / RESUMED 已恢复 / TERMINATED 已强制终止',
+    raised_by      VARCHAR(60)  NOT NULL COMMENT '发起人（值班人员）',
+    resumed_by     VARCHAR(60)  NULL COMMENT '恢复操作人（主管）',
+    resumed_at     DATETIME     NULL COMMENT '恢复时刻',
+    terminated_by  VARCHAR(60)  NULL COMMENT '强制终止操作人（主管）',
+    terminated_at  DATETIME     NULL COMMENT '终止时刻',
+    active_key     BIGINT GENERATED ALWAYS AS (CASE WHEN status = 'ACTIVE' THEN session_id ELSE NULL END) STORED COMMENT '生效中唯一约束辅助列',
+    created_at     DATETIME     NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_redflag_event_no (event_no),
+    UNIQUE KEY uk_active_session (active_key),
+    KEY idx_redflag_session (session_id),
+    KEY idx_redflag_status (status)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '红旗事件';
+
+-- ----------------------------------------------------------------------------
+-- 模块七：红旗车辆核查清单（发起红旗时，以当时仍在赛的车辆逐车快照生成）
+--
+-- 结论提交即冻结，后续任何车辆（退出/送修）都不会改写其它行。
+-- need_repair 提交时车辆进维修状态并建 WAITING 维修单，单号回填到 maint_order_no。
+-- ----------------------------------------------------------------------------
+CREATE TABLE red_flag_check (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    event_id        BIGINT       NOT NULL COMMENT '红旗事件',
+    session_id      BIGINT       NOT NULL COMMENT '所属场次（冗余便于查询）',
+    kart_id         BIGINT       NOT NULL COMMENT '被核查车辆',
+    driver_id       BIGINT       NULL COMMENT '发起时该车的在赛车手（快照）',
+    conclusion      VARCHAR(16)  NULL COMMENT 'NULL 待核查 / CONTINUE 可继续 / RETIRE 退出比赛 / REPAIR 需要维修',
+    remark          VARCHAR(200) NULL COMMENT '核查备注',
+    checked_by      VARCHAR(60)  NULL COMMENT '核查提交人（值班人员）',
+    checked_at      DATETIME     NULL COMMENT '核查提交时刻',
+    maint_order_no  VARCHAR(24)  NULL COMMENT '需要维修时生成的待修维修单号',
+    created_at      DATETIME     NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_check_event_kart (event_id, kart_id),
+    KEY idx_check_event (event_id),
+    KEY idx_check_session (session_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '红旗车辆核查清单';
+
+-- ----------------------------------------------------------------------------
+-- 模块八：红旗期间圈速隔离（与 lap_record 1:1，保护模块四原有的手写 @SQLInsert）
+--
+-- 红旗期间计时设备仍会上报圈速：lap_record 照常留底（valid 按设备原值落，
+-- 不写最快圈、不刷车手历史最好成绩），这里挂一条 PENDING 记录，标明产生于哪次红旗。
+-- 主管恢复前逐条裁定：CONFIRMED 确认有效（此时才补排榜/刷最佳）/ VOID 作废（永不入榜）。
+-- 已裁定记录是冻结的，刷新或重复操作不会让旧圈再次入榜。
+-- ----------------------------------------------------------------------------
+CREATE TABLE red_flag_lap (
+    id               BIGINT       NOT NULL AUTO_INCREMENT,
+    lap_id           BIGINT       NOT NULL COMMENT '圈速记录（lap_record.id），1:1',
+    event_id         BIGINT       NOT NULL COMMENT '产生于哪次红旗事件',
+    session_id       BIGINT       NOT NULL COMMENT '所属场次（冗余）',
+    ruling           VARCHAR(16)  NOT NULL COMMENT 'PENDING 待裁定 / CONFIRMED 已确认有效 / VOID 已作废',
+    ruled_by         VARCHAR(60)  NULL COMMENT '裁定人（主管）',
+    ruled_at         DATETIME     NULL COMMENT '裁定时刻',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_redflag_lap_lap (lap_id),
+    KEY idx_redflag_lap_event (event_id),
+    KEY idx_redflag_lap_session_ruling (session_id, ruling)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '红旗期间圈速隔离裁定';
 
 
 -- ---------------------------- 卡丁车（12 台） ----------------------------

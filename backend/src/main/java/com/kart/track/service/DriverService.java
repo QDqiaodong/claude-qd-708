@@ -18,6 +18,7 @@ import com.kart.track.dto.DriverDtos;
 import com.kart.track.dto.Views;
 import com.kart.track.repository.DriverRepository;
 import com.kart.track.repository.RaceSessionRepository;
+import com.kart.track.repository.RedFlagEventRepository;
 
 /** 模块二：车手（表格 + 最快圈速榜 + 报名本场）。 */
 @Service
@@ -25,10 +26,14 @@ public class DriverService {
 
     private final DriverRepository driverRepository;
     private final RaceSessionRepository sessionRepository;
+    private final RedFlagEventRepository redFlagEventRepository;
 
-    public DriverService(DriverRepository driverRepository, RaceSessionRepository sessionRepository) {
+    public DriverService(DriverRepository driverRepository,
+                         RaceSessionRepository sessionRepository,
+                         RedFlagEventRepository redFlagEventRepository) {
         this.driverRepository = driverRepository;
         this.sessionRepository = sessionRepository;
+        this.redFlagEventRepository = redFlagEventRepository;
     }
 
     @Transactional(readOnly = true)
@@ -105,6 +110,9 @@ public class DriverService {
         if (!"PENDING".equals(session.getStatus()) && !"RUNNING".equals(session.getStatus())) {
             throw new BizException("场次 " + session.getSessionNo() + " 不接受报名");
         }
+        if (redFlagEventRepository.findBySessionIdAndStatus(session.getId(), "ACTIVE").isPresent()) {
+            throw new BizException("场次 " + session.getSessionNo() + " 红旗处理中，暂停报名");
+        }
         if (driver.getSessionId() != null && !driver.getSessionId().equals(session.getId())) {
             throw new BizException(driver.getName() + " 已报名其它场次，请先退赛");
         }
@@ -131,6 +139,9 @@ public class DriverService {
             throw new BizException(driver.getName() + " 当前没有报名任何场次");
         }
         RaceSession session = sessionRepository.findById(driver.getSessionId()).orElse(null);
+        if (session != null && redFlagEventRepository.findBySessionIdAndStatus(session.getId(), "ACTIVE").isPresent()) {
+            throw new BizException("场次 " + session.getSessionNo() + " 红旗处理中，车手离赛请由处置台核查/收口处理");
+        }
         driver.setSessionId(null);
         driverRepository.save(driver);
         if (session != null && session.getSignedCount() > 0) {

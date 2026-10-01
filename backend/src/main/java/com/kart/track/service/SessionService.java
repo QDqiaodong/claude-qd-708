@@ -13,6 +13,8 @@ import com.kart.track.domain.Driver;
 import com.kart.track.domain.Kart;
 import com.kart.track.domain.LapRecord;
 import com.kart.track.domain.RaceSession;
+import com.kart.track.domain.RedFlagEvent;
+import com.kart.track.domain.RedFlagLap;
 import com.kart.track.domain.TrackDict;
 import com.kart.track.dto.SessionDtos;
 import com.kart.track.dto.Views;
@@ -20,6 +22,8 @@ import com.kart.track.repository.DriverRepository;
 import com.kart.track.repository.KartRepository;
 import com.kart.track.repository.LapRecordRepository;
 import com.kart.track.repository.RaceSessionRepository;
+import com.kart.track.repository.RedFlagEventRepository;
+import com.kart.track.repository.RedFlagLapRepository;
 
 /** 模块三：场次（待开赛 → 进行中 → 已结束 / 已取消）。 */
 @Service
@@ -29,15 +33,21 @@ public class SessionService {
     private final DriverRepository driverRepository;
     private final KartRepository kartRepository;
     private final LapRecordRepository lapRecordRepository;
+    private final RedFlagEventRepository redFlagEventRepository;
+    private final RedFlagLapRepository redFlagLapRepository;
 
     public SessionService(RaceSessionRepository sessionRepository,
                           DriverRepository driverRepository,
                           KartRepository kartRepository,
-                          LapRecordRepository lapRecordRepository) {
+                          LapRecordRepository lapRecordRepository,
+                          RedFlagEventRepository redFlagEventRepository,
+                          RedFlagLapRepository redFlagLapRepository) {
         this.sessionRepository = sessionRepository;
         this.driverRepository = driverRepository;
         this.kartRepository = kartRepository;
         this.lapRecordRepository = lapRecordRepository;
+        this.redFlagEventRepository = redFlagEventRepository;
+        this.redFlagLapRepository = redFlagLapRepository;
     }
 
     @Transactional(readOnly = true)
@@ -92,11 +102,25 @@ public class SessionService {
     @Transactional
     public Views.SessionView finish(Long id) {
         RaceSession session = sessionRepository.findById(id).orElseThrow(() -> new BizException("场次不存在"));
+        if (redFlagEventRepository.findBySessionIdAndStatus(session.getId(), "ACTIVE").isPresent()) {
+            throw new BizException("本场红旗处理中，必须先由主管「恢复比赛」或「强制终止」");
+        }
         if (!"RUNNING".equals(session.getStatus())) {
             throw new BizException("只有「进行中」的场次可以结束");
         }
+        finishSession(session, LocalDateTime.now());
+        return toView(session);
+    }
+
+    /**
+     * 场次收口（普通结束 / 红旗强制终止共用）：一次性释放车手与可用车辆。
+     *
+     * <p>车辆只把仍在赛（ON_TRACK）的收为可用；已经退出/送修的车保持其状态，
+     * 绝不出现「车辆已放行但维修记录缺失」或维修车被误放的半完成状态。
+     */
+    void finishSession(RaceSession session, LocalDateTime at) {
         session.setStatus("FINISHED");
-        session.setEndTime(LocalDateTime.now());
+        session.setEndTime(at);
         sessionRepository.save(session);
 
         for (Driver driver : driverRepository.findAllBySessionIdOrderByBestLapMsAsc(session.getId())) {
@@ -110,11 +134,10 @@ public class SessionService {
             Kart kart = kartRepository.findById(kartId).orElse(null);
             if (kart != null && "ON_TRACK".equals(kart.getStatus())) {
                 kart.setStatus("AVAILABLE");
-                kart.setUpdatedAt(LocalDateTime.now());
+                kart.setUpdatedAt(at);
                 kartRepository.save(kart);
             }
         }
-        return toView(session);
     }
 
     /** 取消：待开赛 → 已取消，释放已报名车手 */
@@ -137,7 +160,8 @@ public class SessionService {
         List<LapRecord> laps = lapRecordRepository.findBySessionIdOrderByLapTimeMsAsc(session.getId());
         long elapsed = 0;
         if (session.getStartTime() != null) {
-            LocalDateTime end = "RUNNING".equals(session.getStatus()) ? LocalDateTime.now() : session.getEndTime();
+            LocalDateTime end = "RUNNING".equals(session.getStatus()) || "RED_FLAG".equals(session.getStatus())
+                    ? LocalDateTime.now() : session.getEndTime();
             if (end == null) {
                 end = LocalDateTime.now();
             }
@@ -146,13 +170,17 @@ public class SessionService {
                 elapsed = 0;
             }
         }
+        java.util.Set<Long> excludedLapIds = boardExcludedLapIds(session.getId());
         Integer fastest = null;
         for (LapRecord lap : laps) {
-            if ("VALID".equals(lap.getValid())) {
+            if ("VALID".equals(lap.getValid()) && !excludedLapIds.contains(lap.getId())) {
                 fastest = lap.getLapTimeMs();
                 break;
             }
         }
+        RedFlagEvent active = redFlagEventRepository
+                .findBySessionIdAndStatus(session.getId(), "ACTIVE").orElse(null);
+        long redFlagCount = redFlagEventRepository.findAllBySessionIdOrderByOccurredAtDesc(session.getId()).size();
         return new Views.SessionView(
                 session.getId(),
                 session.getSessionNo(),
@@ -167,6 +195,20 @@ public class SessionService {
                 TrackDict.sessionStatusName(session.getStatus()),
                 elapsed,
                 laps.size(),
-                TrackDict.formatLap(fastest));
+                TrackDict.formatLap(fastest),
+                active != null,
+                active == null ? null : active.getId(),
+                redFlagCount);
+    }
+
+    /** 该场次中不允许进榜的圈速 id：红旗期间待裁定 + 已作废（已确认有效的不在内） */
+    java.util.Set<Long> boardExcludedLapIds(Long sessionId) {
+        java.util.Set<Long> ids = new java.util.HashSet<>();
+        for (RedFlagLap row : redFlagLapRepository.findAllBySessionIdOrderByIdDesc(sessionId)) {
+            if (!"CONFIRMED".equals(row.getRuling())) {
+                ids.add(row.getLapId());
+            }
+        }
+        return ids;
     }
 }

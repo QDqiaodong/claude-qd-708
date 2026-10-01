@@ -69,10 +69,13 @@ public final class Views {
             String statusName,
             long elapsedSec,
             long lapCount,
-            String fastestText) {
+            String fastestText,
+            boolean redFlagActive,
+            Long activeRedFlagId,
+            long redFlagCount) {
     }
 
-    /** 模块四：圈速记录（写入走 @SQLInsert 手写 SQL） */
+    /** 模块四：圈速记录（写入走 @SQLInsert 手写 SQL；红旗期间记录带隔离裁定信息） */
     public record LapRecordView(
             Long id,
             Long sessionId,
@@ -87,7 +90,11 @@ public final class Views {
             boolean fastest,
             String valid,
             String validName,
-            LocalDateTime createdAt) {
+            LocalDateTime createdAt,
+            boolean redFlagLap,
+            Long redFlagEventId,
+            String ruling,
+            String rulingName) {
     }
 
     /** 模块五：维修保养 */
@@ -167,6 +174,100 @@ public final class Views {
             long lapTotal,
             long maintOpen,
             long maintDone,
-            BigDecimal maintFee) {
+            BigDecimal maintFee,
+            long redFlagActive,
+            long redFlagPendingLaps) {
+    }
+
+    /** 红旗车辆核查清单一行（含车辆/车手快照名与最新状态） */
+    public record RedFlagCheckView(
+            Long id,
+            Long eventId,
+            Long kartId,
+            String kartNo,
+            String kartModelName,
+            String kartStatus,
+            String kartStatusName,
+            Long driverId,
+            String driverName,
+            String conclusion,
+            String conclusionName,
+            boolean checked,
+            String remark,
+            String checkedBy,
+            LocalDateTime checkedAt,
+            String maintOrderNo) {
+    }
+
+    /** 红旗期间待裁定圈速一行（圈速 + 隔离裁定信息） */
+    public record RedFlagLapView(
+            Long id,
+            Long lapId,
+            Long eventId,
+            Long sessionId,
+            String sessionNo,
+            Long driverId,
+            String driverName,
+            Long kartId,
+            String kartNo,
+            Integer lapIndex,
+            Integer lapTimeMs,
+            String lapTimeText,
+            boolean fastest,
+            String valid,
+            String validName,
+            LocalDateTime lapCreatedAt,
+            String ruling,
+            String rulingName,
+            String ruledBy,
+            LocalDateTime ruledAt) {
+    }
+
+    /** 一次红旗事件（处置台头部 + 场次详情历史回看） */
+    public record RedFlagEventView(
+            Long id,
+            String eventNo,
+            Long sessionId,
+            String sessionNo,
+            String reason,
+            String status,
+            String statusName,
+            boolean active,
+            String raisedBy,
+            LocalDateTime occurredAt,
+            String resumedBy,
+            LocalDateTime resumedAt,
+            String terminatedBy,
+            LocalDateTime terminatedAt,
+            long durationSec,
+            String durationText,
+            long totalChecks,
+            long checkedCount,
+            long continueCount,
+            long retireCount,
+            long repairCount,
+            long totalLaps,
+            long pendingLapCount,
+            long confirmedLapCount,
+            long voidLapCount,
+            boolean allChecked,
+            boolean allRuled,
+            boolean resumable,
+            String finalAction,
+            String finalActionBy,
+            LocalDateTime finalActionAt,
+            List<RedFlagCheckView> checks,
+            List<RedFlagLapView> laps) {
+    }
+
+    /** 处置台一屏数据：当前生效事件（可空）+ 本场历史红旗 */
+    public record RedFlagConsoleView(
+            Long sessionId,
+            String sessionNo,
+            String sessionStatus,
+            String sessionStatusName,
+            boolean redFlagActive,
+            RedFlagEventView activeEvent,
+            List<RedFlagEventView> history) {
     }
 }

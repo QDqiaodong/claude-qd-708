@@ -20,6 +20,9 @@
       </div>
 
       <div class="top-stats">
+        <div v-if="(overview.redFlagActive || 0) > 0" class="stat-chip is-redflag" @click="goRedFlag" style="cursor: pointer">
+          <b>🚩 {{ overview.redFlagActive || 0 }}</b><span>红旗处理中 · 待裁定 {{ overview.redFlagPendingLaps || 0 }}</span>
+        </div>
         <div class="stat-chip"><b>{{ overview.kartAvailable || 0 }}/{{ overview.kartTotal || 0 }}</b><span>可用车辆</span></div>
         <div class="stat-chip"><b>{{ overview.driverTotal || 0 }}</b><span>注册车手</span></div>
         <div class="stat-chip"><b>{{ overview.sessionRunning || 0 }}</b><span>进行中场次</span></div>
@@ -27,6 +30,17 @@
         <div class="stat-chip" :class="{ 'is-alert': (overview.maintOpen || 0) > 0 }">
           <b>{{ overview.maintOpen || 0 }}</b><span>未完工维修</span>
         </div>
+      </div>
+
+      <!-- 处置台身份：值班人员 / 主管（决定红旗处置台的可执行操作） -->
+      <div class="operator-box">
+        <el-select v-model="operatorId" size="small" placeholder="值班姓名" style="width: 118px" @change="saveOperator">
+          <el-option v-for="name in operatorNames" :key="name" :label="name" :value="name" />
+        </el-select>
+        <el-radio-group v-model="operatorRole" size="small" @change="saveOperator">
+          <el-radio-button label="STAFF">值班</el-radio-button>
+          <el-radio-button label="SUPERVISOR">主管</el-radio-button>
+        </el-radio-group>
       </div>
     </header>
 
@@ -67,11 +81,23 @@ const sessions = ref([])
 const sessionId = ref(null)
 const overview = ref({})
 
+/** 处置台操作人身份（值班人员 / 主管），持久化，写操作通过请求头带给后端 */
+const operatorNames = ['张值班', '李值班', '王主管']
+const operatorId = ref(localStorage.getItem('kt-operator-id') || '张值班')
+const operatorRole = ref(localStorage.getItem('kt-operator-role') || 'STAFF')
+function saveOperator() {
+  localStorage.setItem('kt-operator-id', operatorId.value || '')
+  localStorage.setItem('kt-operator-role', operatorRole.value || 'STAFF')
+}
+saveOperator()
+
 /** 全站共享的「本场」上下文 */
 const track = {
   sessionId,
   sessions,
   overview,
+  operatorId,
+  operatorRole,
   refreshOverview: loadOverview,
   reloadSessions: loadSessions
 }
@@ -90,6 +116,10 @@ const activeKey = computed(() => {
 
 function go(path) {
   nav.push(path)
+}
+
+function goRedFlag() {
+  nav.push('/red-flag')
 }
 
 function onPickSession(id) {
