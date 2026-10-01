@@ -111,6 +111,104 @@ body {
   color: var(--kt-danger);
 }
 
+.role-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rf-alert {
+  animation: rf-blink 1.4s infinite;
+}
+
+@keyframes rf-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* ---------- 红旗处置台 ---------- */
+.rf-banner {
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  color: #fff;
+  background: linear-gradient(120deg, #7f0000 0%, #c62828 60%, #e53935 100%);
+  box-shadow: 0 4px 16px rgba(198, 40, 40, 0.3);
+}
+
+.rf-banner.is-closed {
+  background: linear-gradient(120deg, #37474f 0%, #546e7a 100%);
+  box-shadow: none;
+}
+
+.rf-banner-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rf-banner-title {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.rf-duration {
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 30px;
+  font-weight: 700;
+  margin-left: auto;
+}
+
+.rf-reason {
+  margin-top: 8px;
+  font-size: 14px;
+  opacity: 0.95;
+}
+
+.rf-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.85;
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.rf-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.rf-check-card {
+  border: 1px solid var(--kt-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #fff;
+}
+
+.rf-check-card.is-pending { border-left: 4px solid #90a4ae; }
+.rf-check-card.is-continue { border-left: 4px solid var(--kt-ok); background: #f6fbf6; }
+.rf-check-card.is-retire { border-left: 4px solid var(--kt-warn); background: #fffaf4; }
+.rf-check-card.is-repair { border-left: 4px solid var(--kt-danger); background: #fdf3f3; }
+
+.rf-check-kart {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.rf-check-driver {
+  font-size: 12px;
+  color: var(--kt-text-sub);
+  margin: 2px 0 8px;
+}
+
+.row-pending { background: #fff8e1 !important; }
+.row-voided { opacity: 0.6; }
+
 /* ---------- Tab 导航 ---------- */
 .navbar {
   display: flex;

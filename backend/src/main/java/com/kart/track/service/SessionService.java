@@ -20,6 +20,7 @@ import com.kart.track.repository.DriverRepository;
 import com.kart.track.repository.KartRepository;
 import com.kart.track.repository.LapRecordRepository;
 import com.kart.track.repository.RaceSessionRepository;
+import com.kart.track.repository.RedFlagEventRepository;
 
 /** 模块三：场次（待开赛 → 进行中 → 已结束 / 已取消）。 */
 @Service
@@ -29,15 +30,18 @@ public class SessionService {
     private final DriverRepository driverRepository;
     private final KartRepository kartRepository;
     private final LapRecordRepository lapRecordRepository;
+    private final RedFlagEventRepository redFlagEventRepository;
 
     public SessionService(RaceSessionRepository sessionRepository,
                           DriverRepository driverRepository,
                           KartRepository kartRepository,
-                          LapRecordRepository lapRecordRepository) {
+                          LapRecordRepository lapRecordRepository,
+                          RedFlagEventRepository redFlagEventRepository) {
         this.sessionRepository = sessionRepository;
         this.driverRepository = driverRepository;
         this.kartRepository = kartRepository;
         this.lapRecordRepository = lapRecordRepository;
+        this.redFlagEventRepository = redFlagEventRepository;
     }
 
     @Transactional(readOnly = true)
@@ -88,12 +92,15 @@ public class SessionService {
         return toView(sessionRepository.save(session));
     }
 
-    /** 结束：进行中 → 已结束，顺带收车 + 给每位报名车手累计场次 +1 */
+    /** 结束：进行中 → 已结束，顺带收车 + 给每位报名车手累计场次 +1。红旗处理中只能走处置台收口 */
     @Transactional
     public Views.SessionView finish(Long id) {
         RaceSession session = sessionRepository.findById(id).orElseThrow(() -> new BizException("场次不存在"));
         if (!"RUNNING".equals(session.getStatus())) {
             throw new BizException("只有「进行中」的场次可以结束");
+        }
+        if (redFlagEventRepository.existsByActiveSessionId(id)) {
+            throw new BizException("本场红旗处置中，不能直接结束，请由主管在红旗处置台恢复或强制终止");
         }
         session.setStatus("FINISHED");
         session.setEndTime(LocalDateTime.now());
@@ -134,7 +141,9 @@ public class SessionService {
     }
 
     public Views.SessionView toView(RaceSession session) {
-        List<LapRecord> laps = lapRecordRepository.findBySessionIdOrderByLapTimeMsAsc(session.getId());
+        // 排行榜/最快圈只看可入榜记录：红旗待裁定圈被隔离，CONFIRMED 的红旗圈计入
+        List<LapRecord> ranked = lapRecordRepository.findRankedValid(session.getId());
+        List<LapRecord> allLaps = lapRecordRepository.findBySessionIdOrderByCreatedAtDesc(session.getId());
         long elapsed = 0;
         if (session.getStartTime() != null) {
             LocalDateTime end = "RUNNING".equals(session.getStatus()) ? LocalDateTime.now() : session.getEndTime();
@@ -146,13 +155,10 @@ public class SessionService {
                 elapsed = 0;
             }
         }
-        Integer fastest = null;
-        for (LapRecord lap : laps) {
-            if ("VALID".equals(lap.getValid())) {
-                fastest = lap.getLapTimeMs();
-                break;
-            }
-        }
+        Integer fastest = ranked.isEmpty() ? null : ranked.get(0).getLapTimeMs();
+        Long activeRedFlagId = redFlagEventRepository.findByActiveSessionId(session.getId())
+                .map(com.kart.track.domain.RedFlagEvent::getId).orElse(null);
+        boolean redFlagActive = activeRedFlagId != null;
         return new Views.SessionView(
                 session.getId(),
                 session.getSessionNo(),
@@ -164,9 +170,11 @@ public class SessionService {
                 session.getMaxKarts(),
                 session.getSignedCount(),
                 session.getStatus(),
-                TrackDict.sessionStatusName(session.getStatus()),
+                redFlagActive ? "红旗处理中" : TrackDict.sessionStatusName(session.getStatus()),
                 elapsed,
-                laps.size(),
-                TrackDict.formatLap(fastest));
+                allLaps.size(),
+                TrackDict.formatLap(fastest),
+                activeRedFlagId,
+                redFlagActive);
     }
 }

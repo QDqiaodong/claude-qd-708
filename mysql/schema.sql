@@ -9,6 +9,13 @@
 --   4. lap_record   圈速记录（写入走实体上的 @SQLInsert/@SQLUpdate/@SQLDelete 手写 SQL）
 --   5. maintenance  维修保养（工时·配件费·总费用·待修/维修中/已完工）
 --
+-- 红旗事件处置台（模块六，贯穿 3/4/5）：
+--   6a. red_flag_event 红旗事件（原因·发生时刻·处置中/已恢复/已终止；active_session_id 唯一索引
+--       从数据库层保证「同一场次同时只有一个生效红旗」，并发双发只能落到同一行）
+--   6b. red_flag_check 车辆核查清单（可继续/退出比赛/需要维修；version 乐观锁防过期页面覆盖）
+--   6c. lap_record 增加 red_flag_event_id + adjudication：红旗期间圈速保留为待裁定记录，
+--       不丢、不入榜，主管逐条确认/作废
+--
 -- 种子数据保证下面每条业务规则都能被真的触发（不是"理论上可以"）：
 --   [R1.1] 车号唯一            → K-01 已存在
 --   [R1.2] 车型驾照门槛        → 竞技车要中级以上（无证/初级会被拦）、儿童车只给儿童组
@@ -34,6 +41,8 @@ CREATE DATABASE IF NOT EXISTS kart_track DEFAULT CHARACTER SET utf8mb4 COLLATE u
 USE kart_track;
 
 DROP TABLE IF EXISTS maintenance;
+DROP TABLE IF EXISTS red_flag_check;
+DROP TABLE IF EXISTS red_flag_event;
 DROP TABLE IF EXISTS lap_record;
 DROP TABLE IF EXISTS race_session;
 DROP TABLE IF EXISTS driver;
@@ -102,19 +111,23 @@ CREATE TABLE race_session (
 -- 模块四：圈速记录（写链路走实体上的 @SQLInsert / @SQLUpdate / @SQLDelete）
 -- ----------------------------------------------------------------------------
 CREATE TABLE lap_record (
-    id          BIGINT      NOT NULL AUTO_INCREMENT,
-    session_id  BIGINT      NOT NULL COMMENT '场次',
-    driver_id   BIGINT      NOT NULL COMMENT '车手',
-    kart_id     BIGINT      NOT NULL COMMENT '车辆',
-    lap_index   INT         NOT NULL COMMENT '圈序',
-    lap_time_ms INT         NOT NULL COMMENT '圈速（毫秒）',
-    is_fastest  TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '是否本场最快圈',
-    valid       VARCHAR(16) NOT NULL COMMENT 'VALID 有效 / OUT 无效-出界 / CRASH 无效-碰撞',
-    created_at  DATETIME    NULL COMMENT '记录时间',
+    id                BIGINT      NOT NULL AUTO_INCREMENT,
+    session_id        BIGINT      NOT NULL COMMENT '场次',
+    driver_id         BIGINT      NOT NULL COMMENT '车手',
+    kart_id           BIGINT      NOT NULL COMMENT '车辆',
+    lap_index         INT         NOT NULL COMMENT '圈序',
+    lap_time_ms       INT         NOT NULL COMMENT '圈速（毫秒）',
+    is_fastest        TINYINT(1)  NOT NULL DEFAULT 0 COMMENT '是否本场最快圈',
+    valid             VARCHAR(16) NOT NULL COMMENT 'VALID 有效 / OUT 无效-出界 / CRASH 无效-碰撞 / VOID 红旗作废',
+    created_at        DATETIME    NULL COMMENT '记录时间',
+    red_flag_event_id BIGINT      NULL COMMENT '产生于哪次红旗事件；非空=红旗期间上报、处于待裁定/已裁定隔离状态',
+    adjudication      VARCHAR(16) NOT NULL DEFAULT 'NORMAL' COMMENT 'NORMAL 正常 / PENDING 红旗待裁定 / CONFIRMED 主管确认有效 / VOIDED 主管作废',
     PRIMARY KEY (id),
     KEY idx_lap_session (session_id),
     KEY idx_lap_driver (driver_id),
-    KEY idx_lap_kart (kart_id)
+    KEY idx_lap_kart (kart_id),
+    KEY idx_lap_redflag (red_flag_event_id),
+    KEY idx_lap_adjudication (adjudication)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '圈速记录';
 
 -- ----------------------------------------------------------------------------
@@ -138,6 +151,59 @@ CREATE TABLE maintenance (
     KEY idx_maint_kart (kart_id),
     KEY idx_maint_status (status)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '维修保养';
+
+-- ----------------------------------------------------------------------------
+-- 模块六-a：红旗事件
+--   active_session_id 只在处置中（ACTIVE）时回填本场场次 id，恢复/终止后置 NULL。
+--   配合唯一索引 uk_active_session：数据库层硬性保证同一场次同时只有一个生效红旗，
+--   两名值班人员并发发起也只能有一行落库，另一笔撞唯一键后返回同一事件（幂等）。
+-- ----------------------------------------------------------------------------
+CREATE TABLE red_flag_event (
+    id                BIGINT      NOT NULL AUTO_INCREMENT,
+    event_no          VARCHAR(28) NOT NULL COMMENT '红旗事件号，如 RF-S2026092401-1',
+    session_id        BIGINT      NOT NULL COMMENT '所属场次',
+    reason            VARCHAR(200) NOT NULL COMMENT '红旗原因',
+    raised_by         VARCHAR(30) NOT NULL COMMENT '发起人（值班员）',
+    occurred_at       DATETIME    NOT NULL COMMENT '发生时刻',
+    status            VARCHAR(16) NOT NULL COMMENT 'ACTIVE 红旗处理中 / RESUMED 已恢复 / TERMINATED 已强制终止',
+    active_session_id BIGINT      NULL COMMENT '仅 ACTIVE 时 = 场次 id，其余为 NULL（唯一索引防并发双红旗）',
+    resolution        VARCHAR(16) NULL COMMENT 'RESUME 恢复比赛 / TERMINATE 强制终止',
+    resolved_by       VARCHAR(30) NULL COMMENT '处置主管',
+    resolved_at       DATETIME    NULL COMMENT '处置时刻',
+    resolution_note   VARCHAR(200) NULL COMMENT '处置备注',
+    version           INT         NOT NULL DEFAULT 0 COMMENT '乐观锁版本（防过期页面重复恢复/终止）',
+    created_at        DATETIME    NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_redflag_no (event_no),
+    UNIQUE KEY uk_active_session (active_session_id),
+    KEY idx_redflag_session (session_id),
+    KEY idx_redflag_status (status)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '红旗事件';
+
+-- ----------------------------------------------------------------------------
+-- 模块六-b：红旗车辆核查清单（发起红旗时按当时仍在赛车辆一次性生成）
+--   一台车一行，结论互相独立；某台车退出/送修不释放也不改写其它车的核查结论。
+--   version 乐观锁：过期页面拿着旧 version 提交会被拒，不覆盖新结论。
+-- ----------------------------------------------------------------------------
+CREATE TABLE red_flag_check (
+    id             BIGINT      NOT NULL AUTO_INCREMENT,
+    event_id       BIGINT      NOT NULL COMMENT '红旗事件',
+    session_id     BIGINT      NOT NULL COMMENT '所属场次（冗余便于按场核查）',
+    kart_id        BIGINT      NOT NULL COMMENT '车辆',
+    driver_id      BIGINT      NULL COMMENT '当时驾驶该车的车手（快照）',
+    result         VARCHAR(16) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING 待核查 / CONTINUE 可继续 / RETIRE 退出比赛 / REPAIR 需要维修',
+    note           VARCHAR(200) NULL COMMENT '核查备注（含故障描述）',
+    checked_by     VARCHAR(30) NULL COMMENT '核查值班员',
+    checked_at     DATETIME    NULL COMMENT '核查时刻',
+    maintenance_id BIGINT      NULL COMMENT '需要维修时生成的待修维修单 id（可追踪）',
+    version        INT         NOT NULL DEFAULT 0 COMMENT '乐观锁版本',
+    created_at     DATETIME    NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_check_event_kart (event_id, kart_id),
+    KEY idx_check_session (session_id),
+    KEY idx_check_kart (kart_id),
+    KEY idx_check_result (result)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '红旗车辆核查清单';
 
 
 -- ---------------------------- 卡丁车（12 台） ----------------------------

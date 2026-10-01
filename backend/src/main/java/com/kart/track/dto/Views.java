@@ -69,7 +69,9 @@ public final class Views {
             String statusName,
             long elapsedSec,
             long lapCount,
-            String fastestText) {
+            String fastestText,
+            Long activeRedFlagId,
+            boolean redFlagActive) {
     }
 
     /** 模块四：圈速记录（写入走 @SQLInsert 手写 SQL） */
@@ -87,7 +89,11 @@ public final class Views {
             boolean fastest,
             String valid,
             String validName,
-            LocalDateTime createdAt) {
+            LocalDateTime createdAt,
+            Long redFlagEventId,
+            String adjudication,
+            String adjudicationName,
+            boolean ranked) {
     }
 
     /** 模块五：维修保养 */
@@ -167,6 +173,91 @@ public final class Views {
             long lapTotal,
             long maintOpen,
             long maintDone,
-            BigDecimal maintFee) {
+            BigDecimal maintFee,
+            long redFlagActive) {
+
+        /** 兼容旧构造：新增字段前的 12 参数版本 */
+        public Overview(long kartTotal, long kartAvailable, long kartOnTrack, long kartMaintenance,
+                        long kartDisabled, long driverTotal, long sessionPending, long sessionRunning,
+                        long lapTotal, long maintOpen, long maintDone, BigDecimal maintFee) {
+            this(kartTotal, kartAvailable, kartOnTrack, kartMaintenance, kartDisabled, driverTotal,
+                    sessionPending, sessionRunning, lapTotal, maintOpen, maintDone, maintFee, 0);
+        }
+    }
+
+    // ---------------- 模块六：红旗事件处置台 ----------------
+
+    /** 车辆核查清单一行 */
+    public record RedFlagCheckView(
+            Long id,
+            Long eventId,
+            Long kartId,
+            String kartNo,
+            String modelName,
+            Long driverId,
+            String driverName,
+            String result,
+            String resultName,
+            String note,
+            String checkedBy,
+            LocalDateTime checkedAt,
+            Long maintenanceId,
+            String maintenanceOrderNo,
+            Integer version) {
+    }
+
+    /** 红旗事件（含核查清单 + 红旗期间圈速，处置台一屏） */
+    public record RedFlagEventView(
+            Long id,
+            String eventNo,
+            Long sessionId,
+            String sessionNo,
+            String reason,
+            String raisedBy,
+            LocalDateTime occurredAt,
+            String status,
+            String statusName,
+            String resolution,
+            String resolutionName,
+            String resolvedBy,
+            LocalDateTime resolvedAt,
+            String resolutionNote,
+            long durationSec,
+            Integer version,
+            long checkTotal,
+            long checkPending,
+            long checkContinue,
+            long checkRetire,
+            long checkRepair,
+            boolean allChecked,
+            long lapPending,
+            long lapConfirmed,
+            long lapVoided,
+            boolean allAdjudicated,
+            boolean canResume,
+            boolean canTerminate,
+            List<RedFlagCheckView> checks,
+            List<LapRecordView> laps) {
+    }
+
+    /** 场次详情里的历史红旗事件（轻量摘要，不含清单明细） */
+    public record RedFlagHistoryView(
+            Long id,
+            String eventNo,
+            String reason,
+            String raisedBy,
+            LocalDateTime occurredAt,
+            String status,
+            String statusName,
+            String resolutionName,
+            String resolvedBy,
+            LocalDateTime resolvedAt,
+            long durationSec,
+            long checkTotal,
+            long checkContinue,
+            long checkRetire,
+            long checkRepair,
+            long lapConfirmed,
+            long lapVoided) {
     }
 }

@@ -19,6 +19,17 @@
         </el-select>
       </div>
 
+      <!-- 当前身份切换：值班员只能发起红旗/填核查，主管才能裁定圈速与恢复/终止 -->
+      <div class="role-picker">
+        <el-radio-group v-model="role" size="small" @change="onRoleChange">
+          <el-radio-button label="DUTY">值班员</el-radio-button>
+          <el-radio-button label="SUPERVISOR">主管</el-radio-button>
+        </el-radio-group>
+        <el-tag v-if="(overview.redFlagActive || 0) > 0" type="danger" effect="dark" size="small" class="rf-alert">
+          🚩 {{ overview.redFlagActive }} 场红旗处置中
+        </el-tag>
+      </div>
+
       <div class="top-stats">
         <div class="stat-chip"><b>{{ overview.kartAvailable || 0 }}/{{ overview.kartTotal || 0 }}</b><span>可用车辆</span></div>
         <div class="stat-chip"><b>{{ overview.driverTotal || 0 }}</b><span>注册车手</span></div>
@@ -66,16 +77,22 @@ const nav = useRouter()
 const sessions = ref([])
 const sessionId = ref(null)
 const overview = ref({})
+const role = ref(localStorage.getItem('kart-role') || 'DUTY')
 
-/** 全站共享的「本场」上下文 */
+/** 全站共享的「本场」上下文 + 当前身份 */
 const track = {
   sessionId,
   sessions,
   overview,
+  role,
   refreshOverview: loadOverview,
   reloadSessions: loadSessions
 }
 provide('track', track)
+
+function onRoleChange(value) {
+  localStorage.setItem('kart-role', value)
+}
 
 const todayText = computed(() => {
   const d = new Date()

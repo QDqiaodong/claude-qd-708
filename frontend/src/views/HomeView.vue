@@ -22,6 +22,15 @@
       </div>
     </div>
 
+    <!-- 红旗处理中横幅：圈速照常接收但隔离待裁定，点进处置台 -->
+    <div v-if="session && session.redFlagActive" class="rf-home-banner" @click="goConsole">
+      <span class="rf-home-flag">🚩</span>
+      <div>
+        <b>本场红旗处理中</b> —— 正常圈速入榜已暂停；计时设备上报的圈速将保留为待裁定记录，不污染排行榜。
+      </div>
+      <el-button type="danger" size="small" style="margin-left: auto">前往处置台</el-button>
+    </div>
+
     <div class="cols">
       <!-- 左：赛道俯视图 -->
       <div class="panel">
@@ -106,9 +115,14 @@
         <el-table-column label="圈速" width="110">
           <template #default="{ row }"><b>{{ row.lapTimeText }}</b></template>
         </el-table-column>
-        <el-table-column label="判定" width="120">
+        <el-table-column label="判定" width="170">
           <template #default="{ row }">
             <span class="tag" :class="row.valid === 'VALID' ? 'ok' : 'warn'">{{ row.validName }}</span>
+            <el-tag v-if="row.redFlagEventId" size="small" effect="plain"
+              :type="row.adjudication === 'PENDING' ? 'warning' : row.adjudication === 'CONFIRMED' ? 'success' : 'info'"
+              style="margin-left: 4px">
+              🚩{{ row.adjudicationName }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="本场最快" width="100">
@@ -117,10 +131,13 @@
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="记录时间" />
-        <el-table-column label="操作" width="150">
+        <el-table-column label="操作" width="180">
           <template #default="{ row }">
-            <el-button link type="warning" @click="setValid(row, 'OUT')">判出界</el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
+            <el-button v-if="row.adjudication === 'PENDING'" link type="warning" @click="goConsole">去处置台裁定</el-button>
+            <template v-else>
+              <el-button link type="warning" @click="setValid(row, 'OUT')">判出界</el-button>
+              <el-button link type="danger" @click="remove(row)">删除</el-button>
+            </template>
           </template>
         </el-table-column>
       </el-table>
@@ -162,7 +179,13 @@
 
 <script setup>
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { driverApi, kartApi, lapApi, trackApi } from '../api'
+
+const nav = useRouter()
+function goConsole() {
+  nav.push('/red-flag')
+}
 
 const TRACK_D = 'M140 250 C140 150 215 88 325 88 C435 88 470 130 560 130 C685 130 765 168 765 250 '
   + 'C765 342 692 402 560 402 C458 402 420 372 320 382 C220 392 140 348 140 250 Z'
@@ -326,3 +349,26 @@ onBeforeUnmount(() => {
   clearInterval(pollId)
 })
 </script>
+
+<style scoped>
+.rf-home-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, #7f0000, #c62828);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  animation: rf-home-pulse 1.6s infinite;
+}
+.rf-home-flag {
+  font-size: 20px;
+}
+@keyframes rf-home-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(198, 40, 40, 0.45); }
+  50% { box-shadow: 0 0 0 6px rgba(198, 40, 40, 0); }
+}
+</style>

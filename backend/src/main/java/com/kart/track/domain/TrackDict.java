@@ -77,11 +77,36 @@ public final class TrackDict {
             "FINISHED", "已结束",
             "CANCELED", "已取消");
 
+    // ---------------- 红旗事件 ----------------
+    private static final Map<String, String> RED_FLAG_STATUS = Map.of(
+            "ACTIVE", "红旗处理中",
+            "RESUMED", "已恢复比赛",
+            "TERMINATED", "已强制终止");
+
+    private static final Map<String, String> RED_FLAG_RESOLUTION = Map.of(
+            "RESUME", "恢复比赛",
+            "TERMINATE", "强制终止");
+
+    /** 车辆核查结论 */
+    private static final Map<String, String> CHECK_RESULT = Map.of(
+            "PENDING", "待核查",
+            "CONTINUE", "可继续",
+            "RETIRE", "退出比赛",
+            "REPAIR", "需要维修");
+
+    /** 红旗期间圈速的裁定状态 */
+    private static final Map<String, String> LAP_ADJUDICATION = Map.of(
+            "NORMAL", "正常",
+            "PENDING", "待裁定",
+            "CONFIRMED", "确认有效",
+            "VOIDED", "已作废");
+
     // ---------------- 圈速 ----------------
     private static final Map<String, String> LAP_VALID = Map.of(
             "VALID", "有效",
             "OUT", "无效-出界",
-            "CRASH", "无效-碰撞");
+            "CRASH", "无效-碰撞",
+            "VOID", "红旗作废");
 
     /** 单圈合理区间（毫秒）：快于 20 秒或慢于 5 分钟都视为误录 */
     public static final int MIN_LAP_MS = 20000;
@@ -196,6 +221,30 @@ public final class TrackDict {
 
     public static String lapValidName(String valid) {
         return valid == null ? "" : LAP_VALID.getOrDefault(valid, valid);
+    }
+
+    public static boolean isValidRedFlagStatus(String status) {
+        return status != null && RED_FLAG_STATUS.containsKey(status);
+    }
+
+    public static String redFlagStatusName(String status) {
+        return status == null ? "" : RED_FLAG_STATUS.getOrDefault(status, status);
+    }
+
+    public static String redFlagResolutionName(String resolution) {
+        return resolution == null ? "" : RED_FLAG_RESOLUTION.getOrDefault(resolution, resolution);
+    }
+
+    public static boolean isValidCheckResult(String result) {
+        return result != null && CHECK_RESULT.containsKey(result);
+    }
+
+    public static String checkResultName(String result) {
+        return result == null ? "" : CHECK_RESULT.getOrDefault(result, result);
+    }
+
+    public static String adjudicationName(String adjudication) {
+        return adjudication == null ? "" : LAP_ADJUDICATION.getOrDefault(adjudication, adjudication);
     }
 
     public static boolean isValidMaintType(String type) {

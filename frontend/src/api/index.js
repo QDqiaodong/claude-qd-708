@@ -8,6 +8,22 @@ import { ElMessage } from 'element-plus'
  */
 const http = axios.create({ baseURL: '/api', timeout: 15000 })
 
+/** 当前登录身份：DUTY 值班员 / SUPERVISOR 主管（顶栏切换，持久化到 localStorage） */
+export function currentRole() {
+  return localStorage.getItem('kart-role') || 'DUTY'
+}
+export function currentOperator() {
+  return localStorage.getItem('kart-operator') || (currentRole() === 'SUPERVISOR' ? '值班主管' : '值班员')
+}
+
+http.interceptors.request.use((config) => {
+  config.headers = config.headers || {}
+  config.headers['X-Operator-Role'] = currentRole()
+  // 中文姓名按 RFC 5987 百分号编码放进请求头，后端解码，避免 ISO-8859-1 乱码
+  config.headers['X-Operator-Name'] = encodeURIComponent(currentOperator())
+  return config
+})
+
 http.interceptors.response.use(
   (res) => {
     const body = res.data
@@ -74,4 +90,17 @@ export const maintenanceApi = {
   create: (data) => http.post('/maintenance', data),
   start: (id, worker) => http.post(`/maintenance/${id}/start`, worker ? { worker } : {}),
   complete: (id) => http.post(`/maintenance/${id}/complete`)
+}
+
+/** 模块六：红旗事件处置台 */
+export const redFlagApi = {
+  active: (sessionId) => http.get('/red-flags/active', { params: { sessionId } }),
+  history: (sessionId) => http.get('/red-flags', { params: { sessionId } }),
+  detail: (id) => http.get(`/red-flags/${id}`),
+  raise: (sessionId, data) => http.post(`/red-flags/sessions/${sessionId}/raise`, data),
+  submitCheck: (eventId, checkId, data) => http.post(`/red-flags/${eventId}/checks/${checkId}`, data),
+  adjudicate: (eventId, lapId, adjudication) =>
+    http.post(`/red-flags/${eventId}/laps/${lapId}/adjudicate`, { adjudication }),
+  resume: (eventId, data) => http.post(`/red-flags/${eventId}/resume`, data || {}),
+  terminate: (eventId, data) => http.post(`/red-flags/${eventId}/terminate`, data || {})
 }

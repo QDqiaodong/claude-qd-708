@@ -25,6 +25,7 @@ import com.kart.track.repository.KartRepository;
 import com.kart.track.repository.LapRecordRepository;
 import com.kart.track.repository.MaintenanceRepository;
 import com.kart.track.repository.RaceSessionRepository;
+import com.kart.track.repository.RedFlagEventRepository;
 
 /** 首页「赛道实况」：大计时器 + 场次信息条 + 赛道点位 + 实时圈速排行榜。 */
 @Service
@@ -35,17 +36,20 @@ public class TrackService {
     private final DriverRepository driverRepository;
     private final KartRepository kartRepository;
     private final MaintenanceRepository maintenanceRepository;
+    private final RedFlagEventRepository redFlagEventRepository;
 
     public TrackService(RaceSessionRepository sessionRepository,
                         LapRecordRepository lapRecordRepository,
                         DriverRepository driverRepository,
                         KartRepository kartRepository,
-                        MaintenanceRepository maintenanceRepository) {
+                        MaintenanceRepository maintenanceRepository,
+                        RedFlagEventRepository redFlagEventRepository) {
         this.sessionRepository = sessionRepository;
         this.lapRecordRepository = lapRecordRepository;
         this.driverRepository = driverRepository;
         this.kartRepository = kartRepository;
         this.maintenanceRepository = maintenanceRepository;
+        this.redFlagEventRepository = redFlagEventRepository;
     }
 
     /** 顶栏计数器 */
@@ -65,6 +69,12 @@ public class TrackService {
                 maintOpen += 1;
             }
         }
+        long redFlagActive = 0;
+        for (RaceSession s : sessionRepository.findAllByStatusOrderByStartTimeAsc("RUNNING")) {
+            if (redFlagEventRepository.existsByActiveSessionId(s.getId())) {
+                redFlagActive += 1;
+            }
+        }
         return new Views.Overview(
                 kartRepository.count(),
                 kartRepository.countByStatus("AVAILABLE"),
@@ -77,7 +87,8 @@ public class TrackService {
                 lapRecordRepository.count(),
                 maintOpen,
                 maintDone,
-                fee);
+                fee,
+                redFlagActive);
     }
 
     /**
@@ -102,10 +113,10 @@ public class TrackService {
 
         List<LapRecord> laps = lapRecordRepository.findBySessionIdOrderByCreatedAtDesc(session.getId());
 
-        // 排行榜：有效圈按车手取最快，升序
+        // 排行榜：可入榜的有效圈（红旗待裁定被隔离）按车手取最快，升序
         Map<Long, List<LapRecord>> byDriver = new LinkedHashMap<>();
         for (LapRecord lap : laps) {
-            if (!"VALID".equals(lap.getValid())) {
+            if (!"VALID".equals(lap.getValid()) || "PENDING".equals(lap.getAdjudication())) {
                 continue;
             }
             byDriver.computeIfAbsent(lap.getDriverId(), key -> new ArrayList<>()).add(lap);
@@ -161,13 +172,29 @@ public class TrackService {
 
         String summary = TrackDict.trackConfigName(session.getTrackConfig()) + " · " + session.getGroupCode()
                 + " 组 · " + session.getSignedCount() + "/" + session.getMaxKarts() + " 台";
+
+        // 红旗状态注入实况视图：处理中时状态名改写、计时器仍走、圈速数排除待裁定
+        Long activeRedFlagId = redFlagActiveId(session.getId());
+        long rankedLapCount = laps.stream().filter(l -> !"PENDING".equals(l.getAdjudication())).count();
+        Views.SessionView base = sessionView(session, laps);
+        Views.SessionView sessionView = activeRedFlagId == null ? base : new Views.SessionView(
+                base.id(), base.sessionNo(), base.startTime(), base.endTime(), base.trackConfig(),
+                base.trackConfigName(), base.groupCode(), base.maxKarts(), base.signedCount(),
+                base.status(), "红旗处理中", base.elapsedSec(), base.lapCount(), base.fastestText(),
+                activeRedFlagId, true);
+
         return new Views.LiveView(
-                sessionView(session, laps),
+                sessionView,
                 leaderboard,
                 dots,
-                laps.size(),
+                rankedLapCount,
                 TrackDict.formatLap(bestMs),
                 summary);
+    }
+
+    private Long redFlagActiveId(Long sessionId) {
+        return redFlagEventRepository.findByActiveSessionId(sessionId)
+                .map(com.kart.track.domain.RedFlagEvent::getId).orElse(null);
     }
 
     /** 场次计时：已进行时长（秒） */
@@ -197,7 +224,12 @@ public class TrackService {
 
     private Views.SessionView sessionView(RaceSession session, List<LapRecord> laps) {
         Integer fastest = null;
+        long rankedCount = 0;
         for (LapRecord lap : laps) {
+            if ("PENDING".equals(lap.getAdjudication())) {
+                continue; // 红旗待裁定圈不计入最快圈与已完成圈数
+            }
+            rankedCount += 1;
             if ("VALID".equals(lap.getValid()) && (fastest == null || lap.getLapTimeMs() < fastest)) {
                 fastest = lap.getLapTimeMs();
             }
@@ -215,8 +247,10 @@ public class TrackService {
                 session.getStatus(),
                 TrackDict.sessionStatusName(session.getStatus()),
                 elapsedSec(session),
-                laps.size(),
-                TrackDict.formatLap(fastest));
+                rankedCount,
+                TrackDict.formatLap(fastest),
+                null,
+                false);
     }
 
     /** 车辆在赛道上的相对速度（用于前端小车点位的移动速度） */

@@ -22,18 +22,24 @@ import lombok.Data;
  * 插入 / 更新 / 删除三句全部手写（{@code @SQLInsert} / {@code @SQLUpdate} / {@code @SQLDelete}），
  * Hibernate 不再自己生成这三句语句。
  *
- * <p>占位符顺序 = Hibernate 映射属性时的顺序（按属性名字母序：createdAt / driverId /
- * fastest / kartId / lapIndex / lapTimeMs / sessionId / valid），主键 id 是 IDENTITY，
- * 由 JDBC generated keys 回填，不出现在手写 insert 里。列名逐一写死，顺序一眼可核对。
+ * <p>占位符顺序 = Hibernate 映射属性时的顺序（按属性名字母序：adjudication / createdAt /
+ * driverId / fastest / kartId / lapIndex / lapTimeMs / redFlagEventId / sessionId / valid），
+ * 主键 id 是 IDENTITY，由 JDBC generated keys 回填，不出现在手写 insert 里。列名逐一写死。
+ *
+ * <p>【红旗计时隔离】{@link #redFlagEventId} 非空表示这条圈速产生于某次红旗事件期间，
+ * 处置台主管裁定前 {@link #adjudication}=PENDING：数据保留、可追溯到具体红旗事件，
+ * 但不进实时排行榜、不算本场最快圈、不刷新车手历史最好成绩。裁定后变 CONFIRMED / VOIDED。
  */
 @Data
 @Entity
 @Table(name = "lap_record")
 @SQLInsert(sql = "insert into lap_record "
-        + "(created_at, driver_id, is_fastest, kart_id, lap_index, lap_time_ms, session_id, valid) "
-        + "values (?,?,?,?,?,?,?,?)", check = ResultCheckStyle.NONE)
+        + "(adjudication, created_at, driver_id, is_fastest, kart_id, lap_index, lap_time_ms, "
+        + "red_flag_event_id, session_id, valid) "
+        + "values (?,?,?,?,?,?,?,?,?,?)", check = ResultCheckStyle.NONE)
 @SQLUpdate(sql = "update lap_record "
-        + "set created_at=?, driver_id=?, is_fastest=?, kart_id=?, lap_index=?, lap_time_ms=?, session_id=?, valid=? "
+        + "set adjudication=?, created_at=?, driver_id=?, is_fastest=?, kart_id=?, lap_index=?, "
+        + "lap_time_ms=?, red_flag_event_id=?, session_id=?, valid=? "
         + "where id=?")
 @SQLDelete(sql = "delete from lap_record where id=?")
 public class LapRecord {
@@ -63,10 +69,18 @@ public class LapRecord {
     @Column(name = "is_fastest", nullable = false)
     private boolean fastest;
 
-    /** VALID 有效 / OUT 无效-出界 / CRASH 无效-碰撞 */
+    /** VALID 有效 / OUT 无效-出界 / CRASH 无效-碰撞 / VOID 红旗作废 */
     @Column(name = "valid", nullable = false, length = 16)
     private String valid;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
+
+    /** 产生于哪次红旗事件；NULL=正常比赛圈，非 NULL=红旗期间上报的隔离记录 */
+    @Column(name = "red_flag_event_id")
+    private Long redFlagEventId;
+
+    /** NORMAL 正常 / PENDING 红旗待裁定 / CONFIRMED 主管确认有效 / VOIDED 主管作废 */
+    @Column(name = "adjudication", nullable = false, length = 16)
+    private String adjudication;
 }

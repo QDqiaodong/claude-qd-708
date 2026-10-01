@@ -15,6 +15,7 @@ import com.kart.track.domain.Driver;
 import com.kart.track.domain.Kart;
 import com.kart.track.domain.LapRecord;
 import com.kart.track.domain.RaceSession;
+import com.kart.track.domain.RedFlagEvent;
 import com.kart.track.domain.TrackDict;
 import com.kart.track.dto.LapRecordDtos;
 import com.kart.track.dto.Views;
@@ -22,6 +23,7 @@ import com.kart.track.repository.DriverRepository;
 import com.kart.track.repository.KartRepository;
 import com.kart.track.repository.LapRecordRepository;
 import com.kart.track.repository.RaceSessionRepository;
+import com.kart.track.repository.RedFlagEventRepository;
 
 /**
  * 模块四：圈速记录。
@@ -37,15 +39,18 @@ public class LapRecordService {
     private final RaceSessionRepository sessionRepository;
     private final DriverRepository driverRepository;
     private final KartRepository kartRepository;
+    private final RedFlagEventRepository redFlagEventRepository;
 
     public LapRecordService(LapRecordRepository lapRecordRepository,
                             RaceSessionRepository sessionRepository,
                             DriverRepository driverRepository,
-                            KartRepository kartRepository) {
+                            KartRepository kartRepository,
+                            RedFlagEventRepository redFlagEventRepository) {
         this.lapRecordRepository = lapRecordRepository;
         this.sessionRepository = sessionRepository;
         this.driverRepository = driverRepository;
         this.kartRepository = kartRepository;
+        this.redFlagEventRepository = redFlagEventRepository;
     }
 
     @Transactional(readOnly = true)
@@ -67,6 +72,7 @@ public class LapRecordService {
         }
         List<Views.LapRecordView> list = new ArrayList<>();
         for (LapRecord lap : laps) {
+            String adjudication = lap.getAdjudication() == null ? "NORMAL" : lap.getAdjudication();
             list.add(new Views.LapRecordView(
                     lap.getId(),
                     lap.getSessionId(),
@@ -81,7 +87,11 @@ public class LapRecordService {
                     lap.isFastest(),
                     lap.getValid(),
                     TrackDict.lapValidName(lap.getValid()),
-                    lap.getCreatedAt()));
+                    lap.getCreatedAt(),
+                    lap.getRedFlagEventId(),
+                    adjudication,
+                    TrackDict.adjudicationName(adjudication),
+                    !"PENDING".equals(adjudication) && "VALID".equals(lap.getValid())));
         }
         return list;
     }
@@ -127,6 +137,10 @@ public class LapRecordService {
                 .filter(lap -> lap.getSessionId().equals(session.getId()))
                 .count() + 1;
 
+        // 红旗期间：计时设备仍可能上报圈速。不丢弃、也不入榜——
+        // 保留为挂在本次红旗事件下的 PENDING 待裁定记录，主管裁定后才解套。
+        RedFlagEvent activeRedFlag = redFlagEventRepository.findByActiveSessionId(session.getId()).orElse(null);
+
         LapRecord lap = new LapRecord();
         lap.setSessionId(session.getId());
         lap.setDriverId(driver.getId());
@@ -136,13 +150,25 @@ public class LapRecordService {
         lap.setValid(valid);
         lap.setCreatedAt(LocalDateTime.now());
 
+        if (activeRedFlag != null) {
+            lap.setRedFlagEventId(activeRedFlag.getId());
+            lap.setAdjudication("PENDING");
+            lap.setFastest(false);
+            LapRecord saved = lapRecordRepository.save(lap);
+            return list(session.getId()).stream()
+                    .filter(v -> v.id().equals(saved.getId()))
+                    .findFirst()
+                    .orElseThrow(() -> new BizException("圈速写入失败"));
+        }
+
+        lap.setRedFlagEventId(null);
+        lap.setAdjudication("NORMAL");
+
         boolean fastest = false;
         if ("VALID".equals(valid)) {
-            Integer currentBest = null;
-            for (LapRecord old : lapRecordRepository.findBySessionIdAndValidOrderByLapTimeMsAsc(session.getId(), "VALID")) {
-                currentBest = old.getLapTimeMs();
-                break;
-            }
+            // 当前最快只看可入榜记录（红旗待裁定圈被隔离，不能占位）
+            List<LapRecord> ranked = lapRecordRepository.findRankedValid(session.getId());
+            Integer currentBest = ranked.isEmpty() ? null : ranked.get(0).getLapTimeMs();
             fastest = currentBest == null || ms < currentBest;
             if (fastest && currentBest != null) {
                 // 旧最快圈复位：走 @SQLUpdate 手写 update
@@ -180,6 +206,9 @@ public class LapRecordService {
     @Transactional
     public Views.LapRecordView setValid(Long id, LapRecordDtos.LapValidReq req) {
         LapRecord lap = lapRecordRepository.findById(id).orElseThrow(() -> new BizException("圈速记录不存在"));
+        if ("PENDING".equals(lap.getAdjudication())) {
+            throw new BizException("该圈速产生于红旗期间，须由主管在红旗处置台裁定，不能直接改判");
+        }
         if (!TrackDict.isValidLapValid(req.getValid())) {
             throw new BizException("圈速判定只能是 有效/无效-出界/无效-碰撞");
         }
@@ -194,10 +223,13 @@ public class LapRecordService {
                 .orElseThrow(() -> new BizException("圈速记录不存在"));
     }
 
-    /** 删除一条误录（走 @SQLDelete） */
+    /** 删除一条误录（走 @SQLDelete）；红旗待裁定记录须先在处置台裁定 */
     @Transactional
     public void delete(Long id) {
         LapRecord lap = lapRecordRepository.findById(id).orElseThrow(() -> new BizException("圈速记录不存在"));
+        if ("PENDING".equals(lap.getAdjudication())) {
+            throw new BizException("该圈速是红旗期间的待裁定记录，须由主管确认或作废，不能直接删除");
+        }
         lapRecordRepository.delete(lap);
     }
 }
